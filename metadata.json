@@ -1,0 +1,6 @@
+{
+  "name": "스마트 침대 각도 체위 프로토콜 (SBPP)",
+  "description": "호흡수와 맥박, 산소포화도·혈압 등 활력징후에 따라 최적의 병원 침대 상체 각도를 산출하고 5~10분 안정화 및 욕창 예방 체위변경을 안내하는 스마트 체위변경 프로토콜 및 PRD 워크스페이스입니다.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
