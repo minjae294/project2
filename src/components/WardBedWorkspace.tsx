@@ -3,10 +3,13 @@ import {
   ChevronDown,
   ChevronUp,
   FastForward,
+  MoreHorizontal,
   Pause,
   Play,
   RotateCcw,
   ShieldAlert,
+  Trash2,
+  UserPlus,
 } from 'lucide-react';
 import {
   DEFAULT_CRITICAL_ALERT_STATE,
@@ -16,6 +19,7 @@ import {
   formatTiltKo,
   getDefaultRepositionInterval,
   HIGH_ANGLE_HOB_THRESHOLD,
+  INITIAL_WARD_PATIENTS,
   PatientInputs,
   SacralSkinStatus,
   simulateVitalsAtAngle,
@@ -36,8 +40,12 @@ import { VitalTrendChart } from './VitalTrendChart';
 
 interface WardBedWorkspaceProps {
   patients: WardPatient[];
-  activePatient: WardPatient;
+  activePatient: WardPatient | null;
+  missingDefaultPatientsCount: number;
   onSelectPatient: (id: string) => void;
+  onRequestOpenAddPatient: () => void;
+  onRequestDeletePatient: (patient: WardPatient) => void;
+  onRestoreDefaultPatients: () => void;
   onUpdatePatient: (updated: WardPatient) => void;
   onUpdateField: <K extends keyof PatientInputs>(key: K, value: PatientInputs[K]) => void;
   onUpdateCustomRepositionInterval: (mins: number | null) => void;
@@ -78,7 +86,11 @@ const QUICK_ANGLES = [0, 15, 30, 45, 60, 75, 90];
 export const WardBedWorkspace: React.FC<WardBedWorkspaceProps> = ({
   patients,
   activePatient,
+  missingDefaultPatientsCount,
   onSelectPatient,
+  onRequestOpenAddPatient,
+  onRequestDeletePatient,
+  onRestoreDefaultPatients,
   onUpdatePatient,
   onUpdateField,
   onUpdateCustomRepositionInterval,
@@ -109,8 +121,8 @@ export const WardBedWorkspace: React.FC<WardBedWorkspaceProps> = ({
   onRequestReset,
   stickyTopOffsetPx,
 }) => {
-  const inputs = activePatient.inputs;
-  const elapsedMinutes = Math.max(0, activePatient.elapsedMinutes ?? 0);
+  const inputs = activePatient?.inputs ?? INITIAL_WARD_PATIENTS[0].inputs;
+  const elapsedMinutes = Math.max(0, activePatient?.elapsedMinutes ?? 0);
 
   const activeVitalStatus = useMemo(() => evaluatePatientVitalStatus(inputs), [inputs]);
   const recommendedForPatient = useMemo(() => evaluateBedAngleProtocol(inputs), [inputs]);
@@ -124,15 +136,91 @@ export const WardBedWorkspace: React.FC<WardBedWorkspaceProps> = ({
   );
   const [showVisuals, setShowVisuals] = useState<boolean>(false);
   const [showMoreDetails, setShowMoreDetails] = useState<boolean>(false);
+  const [openCardMenuId, setOpenCardMenuId] = useState<string | null>(null);
 
   useEffect(() => {
     setPlannedHobInput(recommendedForPatient.recommendedHob);
-  }, [activePatient.id, recommendedForPatient.recommendedHob]);
+  }, [activePatient?.id, recommendedForPatient.recommendedHob]);
+
+  useEffect(() => {
+    if (!openCardMenuId) return;
+    const handleMouseDown = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target?.closest('[data-card-menu-root="true"]')) return;
+      setOpenCardMenuId(null);
+    };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpenCardMenuId(null);
+    };
+    document.addEventListener('mousedown', handleMouseDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handleMouseDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [openCardMenuId]);
 
   const liveDecision = useMemo(
     () => evaluateBedAngleProtocol({ ...inputs, currentHob: plannedHobInput }),
     [inputs, plannedHobInput]
   );
+
+  if (patients.length === 0 || !activePatient) {
+    return (
+      <div className="space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="text-xs font-semibold text-slate-600">병실 환자 목록 (0명)</div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              disabled={missingDefaultPatientsCount === 0}
+              onClick={onRestoreDefaultPatients}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-md border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed whitespace-nowrap shrink-0 cursor-pointer"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              <span>
+                기본 환자 복원
+                {missingDefaultPatientsCount > 0 ? ` (${missingDefaultPatientsCount}명)` : ''}
+              </span>
+            </button>
+          </div>
+        </div>
+
+        <section
+          aria-label="등록된 환자 없음"
+          className="bg-white border border-slate-200 rounded-lg p-10 text-center space-y-4"
+        >
+          <div className="space-y-1.5">
+            <h2 className="text-base font-bold text-slate-900">환자를 추가해 주세요</h2>
+            <p className="text-xs text-slate-500">
+              현재 병실에 등록된 환자가 없습니다. 새 환자를 추가하거나 기본 환자를 복원해
+              모니터링을 시작하세요.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center justify-center gap-2.5">
+            <button
+              type="button"
+              onClick={onRequestOpenAddPatient}
+              className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-md whitespace-nowrap cursor-pointer"
+            >
+              <UserPlus className="w-4 h-4" />
+              <span>환자 추가</span>
+            </button>
+            {missingDefaultPatientsCount > 0 && (
+              <button
+                type="button"
+                onClick={onRestoreDefaultPatients}
+                className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-100 border border-slate-300 rounded-md whitespace-nowrap cursor-pointer"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>기본 환자 복원 ({missingDefaultPatientsCount}명)</span>
+              </button>
+            )}
+          </div>
+        </section>
+      </div>
+    );
+  }
 
   // 현재 환자 위험 흐름 상태 (상단/하단 바와 100% 동기화)
   const effectiveCriticalAlert = getEffectiveCriticalAlertFor(activePatient);
@@ -425,14 +513,33 @@ export const WardBedWorkspace: React.FC<WardBedWorkspaceProps> = ({
         </section>
       )}
 
-      {/* ② 환자 선택 카드 (C10: 위험 빨간 테두리+'위험' 배지 / 임박 노란 점 / 지연 빨간 '지연 ○분' 배지) */}
-      <section aria-label="환자 선택 카드">
+      {/* ② 환자 선택 카드 (목록 헤더 + 기본 환자 복원 + 카드별 '⋯' 삭제 메뉴) */}
+      <section aria-label="환자 선택 카드" className="space-y-2.5">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="text-xs font-semibold text-slate-600">
+            병실 환자 목록 ({patients.length}명)
+          </div>
+          <button
+            type="button"
+            disabled={missingDefaultPatientsCount === 0}
+            onClick={onRestoreDefaultPatients}
+            className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold rounded-md border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed whitespace-nowrap shrink-0 cursor-pointer"
+          >
+            <RotateCcw className="w-3.5 h-3.5" />
+            <span>
+              기본 환자 복원
+              {missingDefaultPatientsCount > 0 ? ` (${missingDefaultPatientsCount}명)` : ''}
+            </span>
+          </button>
+        </div>
+
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
           {patients.map((pt) => {
             const ptVs = evaluatePatientVitalStatus(pt.inputs);
             const ptCritActive = isCriticalPriorityActiveFor(pt);
             const isSelected = pt.id === activePatient.id;
             const ptM = getPatientRepositionMetrics(pt);
+            const isMenuOpen = openCardMenuId === pt.id;
 
             const statusColor =
               ptVs.level === 'critical'
@@ -468,49 +575,95 @@ export const WardBedWorkspace: React.FC<WardBedWorkspaceProps> = ({
                 : 'bg-white border-slate-200 hover:border-slate-300';
 
             return (
-              <button
+              <div
                 key={pt.id}
-                type="button"
-                onClick={() => onSelectPatient(pt.id)}
-                className={`text-left p-3.5 rounded-lg border transition-colors cursor-pointer space-y-1.5 ${cardBorderClass}`}
+                className={`relative rounded-lg border transition-colors ${cardBorderClass}`}
               >
-                {/* 항목 1 & 2: 병실·이름 + 상태('위험' 배지 / 주의 / 안정) */}
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-sm font-bold text-slate-900 truncate">
-                    {pt.bedNumber} · {pt.patientName}
-                  </span>
-                  {ptCritActive ? (
-                    <span className="px-2 py-0.5 text-[11px] font-bold bg-red-600 text-white rounded shrink-0">
-                      위험
-                    </span>
-                  ) : (
-                    <span className={`text-xs font-bold shrink-0 ${statusColor}`}>
-                      {ptVs.glyph} {ptVs.label}
-                    </span>
-                  )}
-                </div>
-
-                {/* 항목 3: 한 줄 수치 요약 */}
-                <div className="text-xs font-mono tabular-nums text-slate-600 truncate">
-                  {pt.inputs.currentHob}° · 호흡 {pt.inputs.rr} · 맥박 {pt.inputs.hr} · 산소{' '}
-                  {pt.inputs.spo2}%
-                </div>
-
-                {/* 항목 4: 체위변경 상태 배지 (노란 점 + 임박 / 지연 빨간 배지) */}
-                <div className="flex items-center gap-1.5">
-                  <span
-                    className={`inline-flex items-center gap-1.5 text-[11px] font-mono tabular-nums px-2 py-0.5 rounded border ${repositionBadgeClass}`}
+                {/* 항목 1 & 2: 병실·이름 + 상태 배지 + '⋯' 메뉴 */}
+                <div className="flex items-center justify-between gap-1.5 px-3.5 pt-3.5">
+                  <button
+                    type="button"
+                    onClick={() => onSelectPatient(pt.id)}
+                    className="flex-1 min-w-0 flex items-center justify-between gap-2 text-left cursor-pointer"
                   >
-                    {ptM.isImminent && ptM.overdue === 0 && (
-                      <span
-                        className="w-2 h-2 rounded-full bg-amber-500 shrink-0"
-                        aria-hidden="true"
-                      />
+                    <span className="text-sm font-bold text-slate-900 truncate">
+                      {pt.bedNumber} · {pt.patientName}
+                    </span>
+                    {ptCritActive ? (
+                      <span className="px-2 py-0.5 text-[11px] font-bold bg-red-600 text-white rounded shrink-0">
+                        위험
+                      </span>
+                    ) : (
+                      <span className={`text-xs font-bold shrink-0 ${statusColor}`}>
+                        {ptVs.glyph} {ptVs.label}
+                      </span>
                     )}
-                    <span>{repositionBadgeText}</span>
-                  </span>
+                  </button>
+
+                  <div className="relative shrink-0" data-card-menu-root="true">
+                    <button
+                      type="button"
+                      aria-label={`${pt.bedNumber} ${pt.patientName} 환자 메뉴`}
+                      aria-haspopup="menu"
+                      aria-expanded={isMenuOpen}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setOpenCardMenuId((prev) => (prev === pt.id ? null : pt.id));
+                      }}
+                      className="p-1 rounded hover:bg-slate-200/70 text-slate-500 hover:text-slate-900 transition-colors cursor-pointer"
+                    >
+                      <MoreHorizontal className="w-4 h-4" />
+                    </button>
+
+                    {isMenuOpen && (
+                      <div
+                        role="menu"
+                        className="absolute right-0 mt-1 w-36 bg-white border border-slate-200 rounded-md shadow-lg py-1 z-30"
+                      >
+                        <button
+                          type="button"
+                          role="menuitem"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setOpenCardMenuId(null);
+                            onRequestDeletePatient(pt);
+                          }}
+                          className="w-full px-3 py-1.5 text-left text-xs font-semibold text-red-700 hover:bg-red-50 flex items-center gap-1.5 cursor-pointer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5 shrink-0" />
+                          <span>삭제(퇴원 처리)</span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 </div>
-              </button>
+
+                {/* 항목 3 & 4: 한 줄 수치 요약 + 체위변경 상태 배지 */}
+                <button
+                  type="button"
+                  onClick={() => onSelectPatient(pt.id)}
+                  className="w-full text-left px-3.5 pb-3.5 pt-1.5 space-y-1.5 cursor-pointer"
+                >
+                  <div className="text-xs font-mono tabular-nums text-slate-600 truncate">
+                    {pt.inputs.currentHob}° · 호흡 {pt.inputs.rr} · 맥박 {pt.inputs.hr} · 산소{' '}
+                    {pt.inputs.spo2}%
+                  </div>
+
+                  <div className="flex items-center gap-1.5">
+                    <span
+                      className={`inline-flex items-center gap-1.5 text-[11px] font-mono tabular-nums px-2 py-0.5 rounded border ${repositionBadgeClass}`}
+                    >
+                      {ptM.isImminent && ptM.overdue === 0 && (
+                        <span
+                          className="w-2 h-2 rounded-full bg-amber-500 shrink-0"
+                          aria-hidden="true"
+                        />
+                      )}
+                      <span>{repositionBadgeText}</span>
+                    </span>
+                  </div>
+                </button>
+              </div>
             );
           })}
         </div>
@@ -658,13 +811,23 @@ export const WardBedWorkspace: React.FC<WardBedWorkspaceProps> = ({
               </span>
             </p>
           </div>
-          <button
-            type="button"
-            onClick={() => onToggleRecheckPanel()}
-            className="px-3 py-1.5 text-xs font-semibold text-slate-700 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-md cursor-pointer"
-          >
-            재측정 기록
-          </button>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => onToggleRecheckPanel()}
+              className="px-3 py-1.5 text-xs font-semibold text-slate-700 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-md whitespace-nowrap cursor-pointer"
+            >
+              재측정 기록
+            </button>
+            <button
+              type="button"
+              onClick={() => onRequestDeletePatient(activePatient)}
+              className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-red-700 bg-red-50 hover:bg-red-100 border border-red-200 rounded-md whitespace-nowrap cursor-pointer"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>삭제(퇴원 처리)</span>
+            </button>
+          </div>
         </div>
 
         {activeRuleConflicts.length > 0 && (

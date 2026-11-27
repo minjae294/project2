@@ -1193,6 +1193,8 @@ export interface EmrNursingRecord {
   timestamp: string;
   createdAtMs?: number;
   isPractice?: boolean;
+  patientId?: string;
+  patientDeleted?: boolean;
   bedNumber: string;
   patientName: string;
   prevHob: number;

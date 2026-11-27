@@ -65,6 +65,9 @@ export function App() {
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed)) {
+          if (parsed.length === 0) {
+            return [];
+          }
           const valid = parsed.filter(
             (p): p is WardPatient =>
               Boolean(p) &&
@@ -120,7 +123,7 @@ export function App() {
   });
 
   const [selectedPatientId, setSelectedPatientId] = useState<string>(
-    () => patients[0]?.id || INITIAL_WARD_PATIENTS[0].id
+    () => patients[0]?.id ?? ''
   );
 
   const [emrRecords, setEmrRecords] = useState<EmrNursingRecord[]>(() => {
@@ -157,19 +160,31 @@ export function App() {
 
   const [soundEnabled, setSoundEnabled] = useState<boolean>(false);
   const [resetConfirmOpen, setResetConfirmOpen] = useState<boolean>(false);
+  const [deleteTargetPatient, setDeleteTargetPatient] = useState<WardPatient | null>(null);
+  const [deleteWithRecords, setDeleteWithRecords] = useState<boolean>(false);
 
-  // 선택 환자 지시·재측정 입력 상태
-  const activePatient =
-    patients.find((p) => p.id === selectedPatientId) || patients[0] || INITIAL_WARD_PATIENTS[0];
+  // 선택 환자 지시·재측정 입력 상태 (환자가 없으면 null)
+  const activePatient: WardPatient | null =
+    patients.length > 0
+      ? patients.find((p) => p.id === selectedPatientId) ?? patients[0]
+      : null;
+
+  const missingDefaultPatients = useMemo(() => {
+    const existingIds = new Set(patients.map((p) => p.id));
+    return INITIAL_WARD_PATIENTS.filter((d) => !existingIds.has(d.id));
+  }, [patients]);
 
   const [orderNoteInput, setOrderNoteInput] = useState<string>(
     '산소 유량 확인 및 처치 시행, 15분 간격 경과 관찰'
   );
   const [orderHobInput, setOrderHobInput] = useState<number | null>(null);
-  const [recheckInputs, setRecheckInputs] = useState<{ rr: number; hr: number; spo2: number }>({
-    rr: activePatient.inputs.rr,
-    hr: activePatient.inputs.hr,
-    spo2: activePatient.inputs.spo2,
+  const [recheckInputs, setRecheckInputs] = useState<{ rr: number; hr: number; spo2: number }>(() => {
+    const fallback = activePatient?.inputs ?? INITIAL_WARD_PATIENTS[0].inputs;
+    return {
+      rr: fallback.rr,
+      hr: fallback.hr,
+      spo2: fallback.spo2,
+    };
   });
   const [recheckPanelOpen, setRecheckPanelOpen] = useState<boolean>(false);
 
@@ -228,22 +243,26 @@ export function App() {
     setLastSimRecoveryBadge(null);
     setTimeFlowPlaying(false);
     setStoppedByAlertNotice(false);
+    if (!activePatient) {
+      setRecheckPanelOpen(false);
+      return;
+    }
     setRecheckInputs({
       rr: activePatient.inputs.rr,
       hr: activePatient.inputs.hr,
       spo2: activePatient.inputs.spo2,
     });
-  }, [activePatient.id]);
+  }, [activePatient?.id]);
 
   // 전역 상단 알림 데이터 (위험 알림 전체 vs 일반 알림 접기)
   const criticalAlerts = useMemo(
-    () => buildCriticalPatientAlerts(patients, activePatient.id),
-    [patients, activePatient.id]
+    () => buildCriticalPatientAlerts(patients, activePatient?.id ?? ''),
+    [patients, activePatient?.id]
   );
 
   const normalAlerts = useMemo(
-    () => buildNormalAlerts(patients, activePatient.id, acknowledgedAngleKeys),
-    [patients, activePatient.id, acknowledgedAngleKeys]
+    () => buildNormalAlerts(patients, activePatient?.id ?? '', acknowledgedAngleKeys),
+    [patients, activePatient?.id, acknowledgedAngleKeys]
   );
 
   // A(2) 소리 토글이 켜져 있을 때 새 미처리 위험 알림 발생 시 짧은 경고음
@@ -283,6 +302,104 @@ export function App() {
     setPatients((prev) => [...prev, newPatient]);
     setSelectedPatientId(newPatient.id);
     setActiveTab('workspace');
+  };
+
+  const handleRequestDeletePatient = (target: WardPatient) => {
+    setDeleteTargetPatient(target);
+    setDeleteWithRecords(false);
+  };
+
+  const handleConfirmDeletePatient = () => {
+    if (!deleteTargetPatient) return;
+    const target = deleteTargetPatient;
+    const withRecords = deleteWithRecords;
+
+    const prevPatients = patients;
+    const prevSelectedId = selectedPatientId;
+    const prevEmrRecords = emrRecords;
+    const prevAckKeys = acknowledgedAngleKeys;
+    const prevTimeEvents = timeEvents;
+
+    const deletedIndex = prevPatients.findIndex((p) => p.id === target.id);
+    const remainingPatients = prevPatients.filter((p) => p.id !== target.id);
+    const wasSelected = target.id === activePatient?.id;
+    const nextSelectedId = wasSelected
+      ? remainingPatients.length > 0
+        ? remainingPatients[Math.min(Math.max(0, deletedIndex), remainingPatients.length - 1)].id
+        : ''
+      : activePatient?.id ?? remainingPatients[0]?.id ?? '';
+
+    if (wasSelected) {
+      setTimeFlowPlaying(false);
+      setStoppedByAlertNotice(false);
+      setRecheckPanelOpen(false);
+      setLastSimRecoveryBadge(null);
+      setOrderHobInput(null);
+    }
+
+    setPatients(remainingPatients);
+    setSelectedPatientId(nextSelectedId);
+
+    setAcknowledgedAngleKeys((prev) => {
+      if (!(target.id in prev)) return prev;
+      const next = { ...prev };
+      delete next[target.id];
+      return next;
+    });
+
+    setTimeEvents((prev) =>
+      prev.filter(
+        (ev) =>
+          !(ev.proposalKey?.includes(target.id) ?? false) &&
+          !ev.message.includes(target.bedNumber) &&
+          !ev.message.includes(target.patientName)
+      )
+    );
+
+    const matchesTargetRecord = (r: EmrNursingRecord) =>
+      r.patientId
+        ? r.patientId === target.id
+        : !r.patientDeleted &&
+          r.bedNumber === target.bedNumber &&
+          r.patientName === target.patientName;
+
+    setEmrRecords((prev) =>
+      withRecords
+        ? prev.filter((r) => !matchesTargetRecord(r))
+        : prev.map((r) =>
+            matchesTargetRecord(r)
+              ? { ...r, patientId: r.patientId ?? target.id, patientDeleted: true }
+              : r
+          )
+    );
+
+    setDeleteTargetPatient(null);
+    setDeleteWithRecords(false);
+
+    showToast(`${target.bedNumber} ${target.patientName} 환자를 삭제(퇴원 처리)했습니다`, {
+      label: '되돌리기',
+      onUndo: () => {
+        setPatients(prevPatients);
+        setSelectedPatientId(prevSelectedId);
+        setEmrRecords(prevEmrRecords);
+        setAcknowledgedAngleKeys(prevAckKeys);
+        setTimeEvents(prevTimeEvents);
+        showToast(`${target.bedNumber} ${target.patientName} 환자 삭제를 되돌렸습니다`);
+      },
+    });
+  };
+
+  const handleRestoreDefaultPatients = () => {
+    if (missingDefaultPatients.length === 0) return;
+    const existingMap = new Map(patients.map((p) => [p.id, p]));
+    const defaultIds = new Set(INITIAL_WARD_PATIENTS.map((d) => d.id));
+    const restoredDefaults = INITIAL_WARD_PATIENTS.map((d) => existingMap.get(d.id) ?? d);
+    const customPatients = patients.filter((p) => !defaultIds.has(p.id));
+    setPatients([...restoredDefaults, ...customPatients]);
+    if (!activePatient) {
+      setSelectedPatientId(missingDefaultPatients[0].id);
+    }
+    showToast(`삭제된 기본 환자 ${missingDefaultPatients.length}명을 초기 상태로 복원했습니다`);
   };
 
   const handleAddEmrRecord = (record: EmrNursingRecord) => {
@@ -334,6 +451,7 @@ export function App() {
       timestamp: makeTimestamp(),
       createdAtMs: Date.now(),
       isPractice: opts.isPractice || undefined,
+      patientId: pt.id,
       bedNumber: pt.bedNumber,
       patientName: pt.patientName,
       prevHob: opts.prevHob,
@@ -398,6 +516,7 @@ export function App() {
       timestamp: makeTimestamp(),
       createdAtMs: Date.now(),
       isPractice: isPractice || undefined,
+      patientId: pt.id,
       bedNumber: pt.bedNumber,
       patientName: pt.patientName,
       prevHob: latestInputs.currentHob,
@@ -476,7 +595,7 @@ export function App() {
       timeline: [...curCrit.timeline, alertStep],
     };
 
-    if (targetPatient.id === activePatient.id) {
+    if (targetPatient.id === activePatient?.id) {
       setRecheckInputs({
         rr: targetInputs.rr,
         hr: targetInputs.hr,
@@ -565,7 +684,7 @@ export function App() {
       timeline: [...curCrit.timeline, orderStep],
     };
 
-    if (targetPatient.id === activePatient.id) {
+    if (targetPatient.id === activePatient?.id) {
       setRecheckInputs({ rr: ptInputs.rr, hr: ptInputs.hr, spo2: ptInputs.spo2 });
       setRecheckPanelOpen(true);
     }
@@ -670,7 +789,7 @@ export function App() {
         lastOutcomeDetail: `변화 없음 (${sameVitalsStr})`,
         timeline: [...curCrit.timeline, unchangedStep],
       };
-      if (targetPatient.id === activePatient.id) {
+      if (targetPatient.id === activePatient?.id) {
         setRecheckInputs({ rr: snap.rr, hr: snap.hr, spo2: snap.spo2 });
       }
       handleUpdatePatient({
@@ -748,6 +867,7 @@ export function App() {
         timestamp: makeTimestamp(),
         createdAtMs: Date.now(),
         isPractice: isPractice || undefined,
+        patientId: targetPatient.id,
         bedNumber: targetPatient.bedNumber,
         patientName: targetPatient.patientName,
         prevHob: ptInputs.currentHob,
@@ -1059,7 +1179,7 @@ export function App() {
       setAcknowledgedAngleKeys((prev) => ({ ...prev, [targetPatient.id]: ackKey }));
     }
 
-    if (targetPatient.id === activePatient.id) {
+    if (targetPatient.id === activePatient?.id) {
       setRecheckInputs({ rr: nextSim.rr, hr: nextSim.hr, spo2: nextSim.spo2 });
       setRecheckPanelOpen(true);
     }
@@ -1069,6 +1189,7 @@ export function App() {
       timestamp: makeTimestamp(),
       createdAtMs: Date.now(),
       isPractice: opts?.isPractice || undefined,
+      patientId: targetPatient.id,
       bedNumber: targetPatient.bedNumber,
       patientName: targetPatient.patientName,
       prevHob: curInputs.currentHob,
@@ -1173,6 +1294,7 @@ export function App() {
       id: recordId,
       timestamp: makeTimestamp(),
       createdAtMs: Date.now(),
+      patientId: targetPatient.id,
       bedNumber: targetPatient.bedNumber,
       patientName: targetPatient.patientName,
       prevHob: ptInputs.currentHob,
@@ -1247,6 +1369,7 @@ export function App() {
       id: `reposition-hold-${Date.now()}`,
       timestamp: makeTimestamp(),
       createdAtMs: Date.now(),
+      patientId: targetPatient.id,
       bedNumber: targetPatient.bedNumber,
       patientName: targetPatient.patientName,
       prevHob: ptInputs.currentHob,
@@ -1281,6 +1404,7 @@ export function App() {
 
   // 시간 경과 시뮬레이션
   const advanceTimeBy = (deltaMin: number, isPractice?: boolean) => {
+    if (!activePatient) return;
     const markPractice = isPractice ?? virtualMode;
     const prevElapsed = Math.max(0, activePatient.elapsedMinutes ?? 0);
     const nextElapsed = getNextUniqueElapsedFor(activePatient, deltaMin);
@@ -1611,21 +1735,24 @@ export function App() {
   const advanceTimeRef = useRef(advanceTimeBy);
   advanceTimeRef.current = advanceTimeBy;
 
-  const activeEffCrit = getEffectiveCriticalAlertFor(activePatient);
+  const activeEffCrit = activePatient
+    ? getEffectiveCriticalAlertFor(activePatient)
+    : DEFAULT_CRITICAL_ALERT_STATE;
   const isCriticalTickBlocked =
     activeEffCrit.stage === 'alert_required' || activeEffCrit.stage === 'awaiting_order';
 
   useEffect(() => {
-    if (!timeFlowPlaying || isCriticalTickBlocked) {
+    if (!activePatient || !timeFlowPlaying || isCriticalTickBlocked) {
       return;
     }
     const interval = window.setInterval(() => {
       advanceTimeRef.current(timeSpeed);
     }, 1000);
     return () => window.clearInterval(interval);
-  }, [timeFlowPlaying, timeSpeed, isCriticalTickBlocked]);
+  }, [activePatient?.id, timeFlowPlaying, timeSpeed, isCriticalTickBlocked]);
 
   const handleUpdateField = <K extends keyof PatientInputs>(key: K, value: PatientInputs[K]) => {
+    if (!activePatient) return;
     const updatedInputs: PatientInputs = { ...activePatient.inputs, [key]: value };
     const curCrit = getEffectiveCriticalAlertFor(activePatient);
     const nextCritStatus = evaluatePatientVitalStatus(updatedInputs);
@@ -1672,6 +1799,7 @@ export function App() {
   };
 
   const handleUpdateCustomRepositionInterval = (mins: number | null) => {
+    if (!activePatient) return;
     const clamped = mins === null ? null : Math.max(15, Math.min(240, Math.round(mins)));
     handleUpdatePatient({
       ...activePatient,
@@ -1681,6 +1809,7 @@ export function App() {
   };
 
   const handleApplyPresetFromPractice = (preset: PracticeScenarioPreset) => {
+    if (!activePatient) return;
     const curInputs = activePatient.inputs;
     const nextInputs: PatientInputs = { ...curInputs, ...preset.patch };
     const nextVs = evaluatePatientVitalStatus(nextInputs);
@@ -1734,6 +1863,7 @@ export function App() {
       timestamp: makeTimestamp(),
       createdAtMs: Date.now(),
       isPractice: true,
+      patientId: activePatient.id,
       bedNumber: activePatient.bedNumber,
       patientName: activePatient.patientName,
       prevHob: curInputs.currentHob,
@@ -1761,6 +1891,7 @@ export function App() {
   };
 
   const triggerCriticalDemo = () => {
+    if (!activePatient) return;
     const curInputs = activePatient.inputs;
     const demoVitals = { rr: 27, hr: 138, spo2: 91, sbp: 106, dbp: 68 };
     const testedAngle = curInputs.currentHob;
@@ -1819,10 +1950,32 @@ export function App() {
     setAcknowledgedAngleKeys({});
     setLastSimRecoveryBadge(null);
     setOrderHobInput(null);
-    setPatients(INITIAL_WARD_PATIENTS);
-    setSelectedPatientId(INITIAL_WARD_PATIENTS[0].id);
+
+    const defaultMap = new Map(INITIAL_WARD_PATIENTS.map((d) => [d.id, d]));
+    setPatients((prev) =>
+      prev.map((pt) => {
+        const initialDefault = defaultMap.get(pt.id);
+        if (initialDefault) {
+          return initialDefault;
+        }
+        return {
+          ...pt,
+          elapsedMinutes: 0,
+          repositionStartedAtElapsed: 0,
+          minutesSinceReposition: 0,
+          repositionProposedForCycle: false,
+          repositionHoldCount: 0,
+          repositionSnoozeMinutesLeft: 0,
+          minutesAbove45: 0,
+          highAngleProposedForCycle: false,
+          criticalAlert: DEFAULT_CRITICAL_ALERT_STATE,
+          lastRepositionedLabel: formatRepositionAgoLabel(0, pt.inputs.lateralTilt),
+          history: pt.history.length > 0 ? [pt.history[0]] : [],
+        };
+      })
+    );
     setEmrRecords((prev) => prev.filter((r) => !r.isPractice));
-    showToast('체험 기록과 모든 환자 수치를 처음 상태로 초기화했습니다');
+    showToast('남아 있는 환자의 수치·타이머와 체험 기록을 초기화했습니다');
   };
 
   const topStickyOffset = 64 + topAlertHeight + 6;
@@ -1901,7 +2054,8 @@ export function App() {
 
       {/* A. 위쪽: 모든 탭 상단 고정 위험 알림 영역 (위험 알림 전체 표시 · 일반 알림만 +N 접기) */}
       <GlobalCriticalAlertZone
-        activePatientId={activePatient.id}
+        activePatientId={activePatient?.id ?? null}
+        patientsCount={patients.length}
         criticalAlerts={criticalAlerts}
         normalAlerts={normalAlerts}
         soundEnabled={soundEnabled}
@@ -1941,7 +2095,11 @@ export function App() {
           <WardBedWorkspace
             patients={patients}
             activePatient={activePatient}
+            missingDefaultPatientsCount={missingDefaultPatients.length}
             onSelectPatient={setSelectedPatientId}
+            onRequestOpenAddPatient={() => setIsNewBedOpen(true)}
+            onRequestDeletePatient={handleRequestDeletePatient}
+            onRestoreDefaultPatients={handleRestoreDefaultPatients}
             onUpdatePatient={handleUpdatePatient}
             onUpdateField={handleUpdateField}
             onUpdateCustomRepositionInterval={handleUpdateCustomRepositionInterval}
@@ -1994,38 +2152,98 @@ export function App() {
       />
 
       {/* 체험 도구 플로팅 버튼 & 슬라이드 패널 (하단 바 위쪽에 겹치지 않게 위치) */}
-      <PracticeToolsDrawer
-        activePatient={activePatient}
-        effectiveCriticalAlert={activeEffCrit}
-        criticalDoctorNotified={isDoctorNotifiedFor(activePatient)}
-        bottomOffsetPx={bottomBarHeight + 12}
-        isSafetyConfirmed={Boolean(activeEffCrit.safetyChangeConfirmed)}
-        onToggleSafetyConfirmed={(confirmed) =>
-          handleToggleSafetyConfirmed(activePatient, confirmed)
-        }
-        onRequestReset={() => setResetConfirmOpen(true)}
-        onApplyPreset={handleApplyPresetFromPractice}
-        onNotifyDoctorCritical={(pt, isPractice) => handleNotifyDoctorCritical(pt, isPractice)}
-        orderNoteInput={orderNoteInput}
-        onChangeOrderNote={setOrderNoteInput}
-        orderHobInput={orderHobInput}
-        onChangeOrderHob={setOrderHobInput}
-        onSubmitDoctorOrder={(isPractice) =>
-          handleSubmitDoctorOrder(activePatient, orderNoteInput, orderHobInput, isPractice)
-        }
-        recheckInputs={recheckInputs}
-        onChangeRecheckInputs={setRecheckInputs}
-        onSubmitRecheck={(mode, isPractice) =>
-          handleSubmitCriticalRecheck(activePatient, mode, recheckInputs, isPractice)
-        }
-        onApplyAngleFromPractice={(targetHob, confirmedCritical) =>
-          handleApplyAngleForPatient(activePatient, targetHob, 0, undefined, {
-            isPractice: true,
-            criticalConfirmedOverride: confirmedCritical,
-            allowUndo: true,
-          })
-        }
-      />
+      {activePatient && (
+        <PracticeToolsDrawer
+          activePatient={activePatient}
+          effectiveCriticalAlert={activeEffCrit}
+          criticalDoctorNotified={isDoctorNotifiedFor(activePatient)}
+          bottomOffsetPx={bottomBarHeight + 12}
+          isSafetyConfirmed={Boolean(activeEffCrit.safetyChangeConfirmed)}
+          onToggleSafetyConfirmed={(confirmed) =>
+            handleToggleSafetyConfirmed(activePatient, confirmed)
+          }
+          onRequestReset={() => setResetConfirmOpen(true)}
+          onApplyPreset={handleApplyPresetFromPractice}
+          onNotifyDoctorCritical={(pt, isPractice) => handleNotifyDoctorCritical(pt, isPractice)}
+          orderNoteInput={orderNoteInput}
+          onChangeOrderNote={setOrderNoteInput}
+          orderHobInput={orderHobInput}
+          onChangeOrderHob={setOrderHobInput}
+          onSubmitDoctorOrder={(isPractice) =>
+            handleSubmitDoctorOrder(activePatient, orderNoteInput, orderHobInput, isPractice)
+          }
+          recheckInputs={recheckInputs}
+          onChangeRecheckInputs={setRecheckInputs}
+          onSubmitRecheck={(mode, isPractice) =>
+            handleSubmitCriticalRecheck(activePatient, mode, recheckInputs, isPractice)
+          }
+          onApplyAngleFromPractice={(targetHob, confirmedCritical) =>
+            handleApplyAngleForPatient(activePatient, targetHob, 0, undefined, {
+              isPractice: true,
+              criticalConfirmedOverride: confirmedCritical,
+              allowUndo: true,
+            })
+          }
+        />
+      )}
+
+      {/* 환자 삭제(퇴원 처리) 확인 모달 */}
+      {deleteTargetPatient && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/35">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delete-patient-title"
+            className="w-full max-w-sm bg-white border border-slate-200 rounded-lg shadow-xl p-5 space-y-4"
+          >
+            <div className="space-y-1.5">
+              <h3 id="delete-patient-title" className="text-base font-bold text-slate-900">
+                {deleteTargetPatient.bedNumber} {deleteTargetPatient.patientName} 환자를
+                삭제할까요?
+              </h3>
+              <p className="text-xs text-slate-600 leading-relaxed">
+                삭제(퇴원 처리)하면 이 환자의 위험 알림, 체위변경 타이머, 위험 대응 상태가 모두
+                정리됩니다.
+              </p>
+            </div>
+
+            <label className="flex items-start gap-2.5 p-3 rounded-md bg-slate-50 border border-slate-200 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={deleteWithRecords}
+                onChange={(e) => setDeleteWithRecords(e.target.checked)}
+                className="mt-0.5 w-4 h-4 accent-red-600 cursor-pointer"
+              />
+              <span className="text-xs text-slate-800 leading-snug">
+                <strong className="block font-semibold">간호 기록도 함께 삭제</strong>
+                <span className="text-[11px] text-slate-500">
+                  체크하지 않으면 기록은 남기고 간호 기록함에서 이름 옆에 (삭제됨)을 표시합니다.
+                </span>
+              </span>
+            </label>
+
+            <div className="flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setDeleteTargetPatient(null);
+                  setDeleteWithRecords(false);
+                }}
+                className="px-3.5 py-2 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-100 border border-slate-300 rounded-md cursor-pointer"
+              >
+                취소
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDeletePatient}
+                className="px-3.5 py-2 text-xs font-bold text-white bg-red-600 hover:bg-red-700 rounded-md cursor-pointer"
+              >
+                삭제(퇴원 처리)
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* '처음으로' 초기화 확인 모달 */}
       {resetConfirmOpen && (
@@ -2041,8 +2259,8 @@ export function App() {
                 처음 상태로 초기화할까요?
               </h3>
               <p className="text-xs text-slate-600 leading-relaxed">
-                모든 환자의 수치, 체위변경 타이머, 그리고 간호 기록함의 체험 기록이 모두
-                초기화됩니다.
+                현재 남아 있는 환자의 수치, 체위변경 타이머, 그리고 간호 기록함의 체험 기록이
+                초기화됩니다. (삭제한 환자는 다시 살아나지 않습니다.)
               </p>
             </div>
             <div className="flex items-center justify-end gap-2">

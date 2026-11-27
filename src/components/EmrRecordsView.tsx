@@ -76,7 +76,7 @@ export const EmrRecordsView: React.FC<EmrRecordsViewProps> = ({ records }) => {
         r.timestamp,
         r.isPractice ? '체험' : '일반',
         r.bedNumber,
-        r.patientName,
+        `${r.patientName}${r.patientDeleted ? ' (삭제됨)' : ''}`,
         r.criticalEpisodeMeta
           ? `위험대응에피소드(${r.criticalEpisodeMeta.statusLabel})`
           : r.repositionMeta
@@ -239,6 +239,11 @@ export const EmrRecordsView: React.FC<EmrRecordsViewProps> = ({ records }) => {
                           <span className="font-semibold text-slate-900">{rec.bedNumber}</span>
                           <span className="text-slate-400 mx-1">·</span>
                           <span className="text-slate-700">{rec.patientName}</span>
+                          {rec.patientDeleted && (
+                            <span className="ml-1 text-[11px] font-medium text-slate-500">
+                              (삭제됨)
+                            </span>
+                          )}
                         </td>
                         <td className="py-3.5 px-4 font-mono tabular-nums text-slate-900">
                           {ep ? (

@@ -24,7 +24,8 @@ interface RecheckDraft {
 }
 
 interface GlobalCriticalAlertZoneProps {
-  activePatientId: string;
+  activePatientId: string | null;
+  patientsCount: number;
   criticalAlerts: CriticalPatientAlertItem[];
   normalAlerts: QueuedNormalAlert[];
   soundEnabled: boolean;
@@ -61,6 +62,7 @@ interface GlobalCriticalAlertZoneProps {
 
 export const GlobalCriticalAlertZone: React.FC<GlobalCriticalAlertZoneProps> = ({
   activePatientId,
+  patientsCount,
   criticalAlerts,
   normalAlerts,
   soundEnabled,
@@ -98,6 +100,39 @@ export const GlobalCriticalAlertZone: React.FC<GlobalCriticalAlertZoneProps> = (
     observer.observe(el);
     return () => observer.disconnect();
   }, [onHeightChange]);
+
+  useEffect(() => {
+    const critIds = new Set(criticalAlerts.map((a) => a.patient.id));
+    const normIds = new Set(normalAlerts.map((a) => a.patient.id));
+    if (openOrderPatientId && !critIds.has(openOrderPatientId)) {
+      setOpenOrderPatientId(null);
+    }
+    if (openRecheckPatientId && !critIds.has(openRecheckPatientId)) {
+      setOpenRecheckPatientId(null);
+    }
+    if (holdTargetPatientId && !normIds.has(holdTargetPatientId)) {
+      setHoldTargetPatientId(null);
+      setCustomHoldReason('');
+    }
+    setOrderDrafts((prev) => {
+      const keys = Object.keys(prev);
+      if (keys.every((k) => critIds.has(k))) return prev;
+      const next: Record<string, OrderDraft> = {};
+      for (const k of keys) {
+        if (critIds.has(k)) next[k] = prev[k];
+      }
+      return next;
+    });
+    setRecheckDrafts((prev) => {
+      const keys = Object.keys(prev);
+      if (keys.every((k) => critIds.has(k))) return prev;
+      const next: Record<string, RecheckDraft> = {};
+      for (const k of keys) {
+        if (critIds.has(k)) next[k] = prev[k];
+      }
+      return next;
+    });
+  }, [criticalAlerts, normalAlerts, openOrderPatientId, openRecheckPatientId, holdTargetPatientId]);
 
   const visibleCritical = showAllCritical ? criticalAlerts : criticalAlerts.slice(0, 3);
   const hiddenCriticalCount = Math.max(0, criticalAlerts.length - 3);
@@ -181,7 +216,11 @@ export const GlobalCriticalAlertZone: React.FC<GlobalCriticalAlertZoneProps> = (
                 criticalAlerts.length > 0 ? 'text-red-600' : 'text-slate-500'
               }`}
             />
-            {criticalAlerts.length > 0 ? (
+            {patientsCount === 0 ? (
+              <span className="text-slate-600">
+                ● 등록된 환자가 없습니다 · 환자를 추가해 주세요
+              </span>
+            ) : criticalAlerts.length > 0 ? (
               <span className="text-red-700 font-bold">
                 위험 환자 {criticalAlerts.length}명 (전체 표시 · +N 접기 안 함)
               </span>

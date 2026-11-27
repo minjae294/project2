@@ -13,7 +13,7 @@ import {
 } from '../utils/wardHelpers';
 
 interface QuickRepositionBarProps {
-  activePatient: WardPatient;
+  activePatient: WardPatient | null;
   onQuickReposition: (patient: WardPatient, tilt: LateralTiltPosition) => void;
   onQuickAngle: (patient: WardPatient, targetHob: number) => void;
   onToggleSafetyConfirmed: (patient: WardPatient, confirmed: boolean) => void;
@@ -33,6 +33,10 @@ export const QuickRepositionBar: React.FC<QuickRepositionBarProps> = ({
   const [angleDrawerOpen, setAngleDrawerOpen] = useState<boolean>(false);
 
   useEffect(() => {
+    if (!activePatient) {
+      onHeightChange?.(0);
+      return;
+    }
     const el = barRef.current;
     if (!el || typeof ResizeObserver === 'undefined' || !onHeightChange) return;
     const update = () => onHeightChange(el.offsetHeight);
@@ -40,7 +44,11 @@ export const QuickRepositionBar: React.FC<QuickRepositionBarProps> = ({
     const observer = new ResizeObserver(update);
     observer.observe(el);
     return () => observer.disconnect();
-  }, [onHeightChange]);
+  }, [activePatient, onHeightChange]);
+
+  if (!activePatient) {
+    return null;
+  }
 
   const metrics = getPatientRepositionMetrics(activePatient);
   const isCriticalActive = isCriticalPriorityActiveFor(activePatient);
